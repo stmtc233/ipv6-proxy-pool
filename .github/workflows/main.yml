@@ -14,6 +14,8 @@ jobs:
         exclude: # 排除某些平台和架构
           - goarch: arm64
             goos: windows
+          - goarch: 386
+            goos: darwin
     steps:
       - uses: actions/checkout@v3
       - uses: wangyoucao577/go-release-action@v1.30
