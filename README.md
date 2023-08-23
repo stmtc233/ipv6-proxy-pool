@@ -10,6 +10,11 @@
 
 默认绑定0.0.0.0:1080
 
+## 演示
+![ys](https://github.com/stmtc233/ipv6-proxy-pool/blob/e18f0033c9b5c21a41fdec4613f67e8059582896/ys.gif)
+
+每次请求都是不同ip的
+
 ## 如何使用
 怎么运行这个程序就不多说了 **这里说下怎么添加ipv6地址**
 
