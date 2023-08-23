@@ -130,7 +130,8 @@ func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
 }
 func main() {
 	ipv6Addresses, _ = getIPv6Addresses()
-	listenAddr := "127.0.0.1:1080"
+
+	listenAddr := "0.0.0.0:1080"
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Println("Error starting proxy:", err)
