@@ -3,14 +3,47 @@ package main
 import (
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
 var ipv6Addresses []string
+var counter *Counter
 
+type Counter struct {
+	mu     sync.Mutex
+	count  int
+	maxVal int
+}
+
+func NewCounter(maxVal int) *Counter {
+	return &Counter{
+		maxVal: maxVal,
+	}
+}
+
+func (c *Counter) Increment() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.count == c.maxVal {
+		c.count = 0
+	}
+
+	currentCount := c.count
+	c.count++
+	return currentCount
+}
+func isFirstCharacterTwo(input string) bool {
+	if len(input) == 0 {
+		return false
+	}
+
+	firstChar := input[0]
+	return firstChar == '2'
+}
 func getIPv6Addresses() ([]string, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -21,10 +54,14 @@ func getIPv6Addresses() ([]string, error) {
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() == nil && ipnet.IP.To16() != nil {
-				ipv6Addresses = append(ipv6Addresses, ipnet.IP.String())
+				if isFirstCharacterTwo(ipnet.IP.String()) {
+					ipv6Addresses = append(ipv6Addresses, ipnet.IP.String())
+				}
 			}
 		}
 	}
+	fmt.Printf("You have %d IPv6 addresses.\n", len(ipv6Addresses))
+
 	return ipv6Addresses, nil
 }
 
@@ -33,7 +70,7 @@ func handleClient(clientConn net.Conn) {
 
 	// 接受客户端请求
 	buf := make([]byte, 256)
-	n, err := clientConn.Read(buf)
+	_, err := clientConn.Read(buf)
 	if err != nil {
 		fmt.Println("Error reading from client:", err)
 		return
@@ -53,7 +90,7 @@ func handleClient(clientConn net.Conn) {
 	}
 
 	// 解析连接请求
-	n, err = clientConn.Read(buf)
+	n, err := clientConn.Read(buf)
 	if err != nil {
 		fmt.Println("Error reading from client:", err)
 		return
@@ -81,10 +118,10 @@ func handleClient(clientConn net.Conn) {
 
 	// 建立到目标服务器的连接
 
-	destConn, err := zdipfw("tcp6", fmt.Sprintf("%s:%d", destAddr, destPort), ipv6Addresses[rand.Intn(len(ipv6Addresses))])
+	destConn, err := zdipfw("tcp6", fmt.Sprintf("%s:%d", destAddr, destPort), ipv6Addresses[counter.Increment()])
 
 	if err != nil {
-		//fmt.Println("Error connecting to destination:", err)
+		fmt.Println("Error connecting to destination:", err)
 		return
 	}
 	defer destConn.Close()
@@ -130,6 +167,8 @@ func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
 }
 func main() {
 	ipv6Addresses, _ = getIPv6Addresses()
+	maxVal := len(ipv6Addresses)
+	counter = NewCounter(maxVal)
 
 	listenAddr := "0.0.0.0:1080"
 	listener, err := net.Listen("tcp", listenAddr)
