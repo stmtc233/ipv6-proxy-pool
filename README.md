@@ -52,3 +52,5 @@ bat_file.write("\n".join(bat_data))
 bat_file.close()
 ```
 运行完毕会生成ifconfig.bat 运行即可
+
+如果需要删除把代码中的add换成del在运行一遍就行了 windows好像要把后面的/64也删了
