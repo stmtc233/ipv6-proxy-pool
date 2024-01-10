@@ -220,9 +220,9 @@ func main() {
 	maxVal := len(ipv6Addresses)
 	counter = NewCounter(maxVal)
 	// 删除除了ya之外的ipv6地址
-	p := promptForYesNo("是否要删除当前的/128后缀的ipv6地址")
+	p := promptForYesNo("是否要删除当前除64位前缀以外的地址（谨慎操作）")
 	if p {
-		fmt.Println("正在删除老地址")
+		fmt.Println("正在删除地址")
 		processIPv6Addresses(ipv6Addresses, networkName, ya)
 		fmt.Println("删除完成")
 	}
