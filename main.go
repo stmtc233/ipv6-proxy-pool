@@ -11,11 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"gopkg.in/ini.v1"
 )
-
 var ipv6Addresses []string
 var counter *Counter
 
