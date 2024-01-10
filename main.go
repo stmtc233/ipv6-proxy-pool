@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/ini.v1"
 )
 
 var ipv6Addresses []string
@@ -44,23 +51,33 @@ func isFirstCharacterTwo(input string) bool {
 	firstChar := input[0]
 	return firstChar == '2'
 }
-func getIPv6Addresses() ([]string, error) {
-	addrs, err := net.InterfaceAddrs()
+
+// 获取所有ipv6地址
+func getIPv6Addresses(Networkname string) ([]string, error) {
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
 
 	var ipv6Addresses []string
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() == nil && ipnet.IP.To16() != nil {
-				if isFirstCharacterTwo(ipnet.IP.String()) {
-					ipv6Addresses = append(ipv6Addresses, ipnet.IP.String())
+	for _, iface := range interfaces {
+		if iface.Name == Networkname {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				return nil, err
+			}
+
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+					if ipnet.IP.To4() == nil && ipnet.IP.To16() != nil {
+						if isFirstCharacterTwo(ipnet.IP.String()) {
+							ipv6Addresses = append(ipv6Addresses, ipnet.IP.String())
+						}
+					}
 				}
 			}
 		}
 	}
-	fmt.Printf("You have %d IPv6 addresses.\n", len(ipv6Addresses))
 
 	return ipv6Addresses, nil
 }
@@ -106,9 +123,12 @@ func handleClient(clientConn net.Conn) {
 
 	switch addressType {
 	case 0x01: // IPv4地址
-		destAddr = net.IP(buf[4:8]).String()
+		// destAddr = net.IP(buf[4:8]).String()
+		return
 	case 0x03: // 域名
 		destAddr = string(buf[5 : n-2]) // 去掉第一个字节（表示域名长度）和最后两个字节（表示端口）
+	case 0x04: // ipv6地址 没测试行不行应该问题不大
+		destAddr = net.IP(buf[4:20]).String()
 	default:
 		fmt.Println("Unsupported address type")
 		return
@@ -147,7 +167,7 @@ func handleClient(clientConn net.Conn) {
 	}
 }
 func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
-	//本地地址  ipaddr是本地外网IP
+	//本地地址
 	lAddr, err := net.ResolveTCPAddr(netw, "["+fwip+"]:0")
 	if err != nil {
 		return nil, err
@@ -161,14 +181,69 @@ func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(35 * time.Second)
-	conn.SetDeadline(deadline)
+	//deadline := time.Now().Add(35 * time.Second)
+	//conn.SetDeadline(deadline)
 	return conn, nil
 }
+
+var osName string
+
 func main() {
-	ipv6Addresses, _ = getIPv6Addresses()
+	osName = runtime.GOOS
+
+	// 判断操作系统类型
+	switch osName {
+	case "windows":
+		fmt.Println("当前操作系统是 Windows")
+	case "linux":
+		fmt.Println("当前操作系统是 Linux")
+	default:
+		fmt.Println("未知操作系统")
+	}
+	// 加载INI配置文件
+
+	cfg, err := ini.Load("config.ini")
+	if err != nil {
+		fmt.Println("无法加载INI配置文件:", err)
+		return
+	}
+
+	// 获取Networkname字段
+	section := cfg.Section("")
+	networkName := section.Key("Networkname").String()
+	fmt.Println("Networkname:", networkName)
+	//获取前缀长度为64的公网地址
+	ya := get64(networkName)
+
+	// 获取当前的ipv6地址
+	ipv6Addresses, _ = getIPv6Addresses(networkName)
 	maxVal := len(ipv6Addresses)
 	counter = NewCounter(maxVal)
+	// 删除除了ya之外的ipv6地址
+	p := promptForYesNo("是否要删除当前的/128后缀的ipv6地址")
+	if p {
+		fmt.Println("正在删除老地址")
+		processIPv6Addresses(ipv6Addresses, networkName, ya)
+		fmt.Println("删除完成")
+	}
+	p = promptForYesNo("是否添加ipv6地址")
+	if p {
+		//生成地址
+		var userInput int
+		fmt.Print("添加的数量:")
+		fmt.Scanf("%d", &userInput)
+		fmt.Println("添加地址中")
+		na := generateRandomIPv6Batch(ya[0], userInput)
+		for c := 0; c < len(na); c++ {
+			setaddres("add", networkName, na[c])
+		}
+	}
+
+	//获取当前地址
+	ipv6Addresses, _ = getIPv6Addresses(networkName)
+	maxVal = len(ipv6Addresses)
+	counter = NewCounter(maxVal)
+	fmt.Printf("You have %d IPv6 addresses.\n", len(ipv6Addresses))
 
 	listenAddr := "0.0.0.0:1080"
 	listener, err := net.Listen("tcp", listenAddr)
@@ -188,4 +263,165 @@ func main() {
 		}
 		go handleClient(clientConn)
 	}
+}
+func promptForYesNo(prompt string) bool {
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Print(prompt + " (y/n): ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading input:", err)
+			return false
+		}
+
+		// 清除输入中的空白字符
+		input = strings.TrimSpace(input)
+
+		// 判断输入是否为y或n，不区分大小写
+		if strings.EqualFold(input, "y") {
+			return true
+		} else if strings.EqualFold(input, "n") {
+			return false
+		}
+
+		fmt.Println("请只输入 'y' 或 'n'")
+	}
+}
+func get64(Networkname string) []string {
+	// 获取指定网络接口
+	iface, err := net.InterfaceByName(Networkname)
+	if err != nil {
+		fmt.Println("获取网络接口失败:", err)
+		return nil
+	}
+
+	//fmt.Println("接口名称:", iface.Name)
+
+	// 获取接口的地址信息
+	addrs, err := iface.Addrs()
+	if err != nil {
+		fmt.Println("获取地址信息失败:", err)
+		return nil
+	}
+
+	// 遍历每个地址
+	var r []string
+	for _, addr := range addrs {
+
+		addrStr := addr.String()
+		// 检查地址字符串中的前缀长度是否为64
+		if isFirstCharacterTwo(addrStr) {
+			fmt.Println("IPv6 地址:", addr)
+			if strings.HasSuffix(addrStr, "/64") {
+				//fmt.Println("IPv6 地址:", addr)
+				r = append(r, strings.TrimSuffix(addrStr, "/64"))
+			}
+		}
+
+	}
+	return r
+}
+
+// 运行cmd命令
+func runCmd(command string) error {
+	switch osName {
+	case "windows":
+		cmd := exec.Command("cmd", "/c", command)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("命令运行失败: %v\n输出: %s", err, output)
+		}
+		return nil
+	case "linux":
+		// 使用Command函数创建Cmd结构体
+		command := exec.Command("bash", "-c", command)
+
+		// 执行命令并获取输出
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("命令运行失败: %v\n输出: %s", err, output)
+		}
+	default:
+		fmt.Println("未知操作系统")
+	}
+	return nil
+}
+
+func setaddres(set, networkName, ipv6Address string) {
+	// 构建netsh命令
+	var cmd string
+	switch osName {
+	case "windows":
+		if set == "add" {
+			cmd = fmt.Sprintf(`netsh interface ipv6 %s address "%s" %s/128`, set, networkName, ipv6Address)
+		} else {
+			cmd = fmt.Sprintf(`netsh interface ipv6 %s address "%s" %s`, set, networkName, ipv6Address)
+		}
+	case "linux":
+		if set == "add" {
+			cmd = fmt.Sprintf(`ifconfig %s inet6 %s %s/128`, networkName, set, ipv6Address)
+		} else {
+			cmd = fmt.Sprintf(`ifconfig %s inet6 %s %s`, networkName, set, ipv6Address)
+		}
+	default:
+		fmt.Println("未知操作系统")
+	}
+
+	// 运行命令
+	err := runCmd(cmd)
+	if err != nil {
+		fmt.Println("运行命令失败:", err)
+		return
+	}
+}
+
+// 处理IPv6地址切片
+func processIPv6Addresses(ipv6Addresses []string, Networkname string, ya []string) {
+	// 遍历IPv6地址切片
+	for _, address := range ipv6Addresses {
+		// 检查是否包含在ya切片中
+		found := false
+		for _, prefix := range ya {
+			if strings.Contains(address, prefix) {
+				found = true
+				break
+			}
+		}
+
+		// 如果包含在ya切片中，则跳过
+		if found {
+			continue
+		}
+
+		// 否则，执行操作
+		setaddres("del", Networkname, address)
+	}
+}
+
+// 生成具有相同64位前缀的随机IPv6地址
+func generateRandomIPv6Batch(baseIPv6 string, count int) []string {
+	// 解析基础IPv6地址
+	baseIP := net.ParseIP(baseIPv6)
+	if baseIP == nil {
+		return nil
+	}
+
+	// 获取前64位前缀
+	prefix := baseIP[:8]
+
+	// 生成随机的后64位
+	//rand.Seed(time.Now().UnixNano())
+	randomIPv6Addresses := make([]string, count)
+
+	for i := 0; i < count; i++ {
+		randomSuffix := make([]byte, 8)
+		rand.Read(randomSuffix)
+
+		// 合并前64位前缀和随机的后64位
+		randomIPv6 := net.IP(append(prefix, randomSuffix...)).String()
+		randomIPv6Addresses[i] = randomIPv6
+	}
+
+	return randomIPv6Addresses
 }
