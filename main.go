@@ -12,10 +12,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cheggaaa/pb/v3"
 	"gopkg.in/ini.v1"
 )
+
 var ipv6Addresses []string
 var counter *Counter
+var osName string
 
 type Counter struct {
 	mu     sync.Mutex
@@ -136,7 +139,7 @@ func handleClient(clientConn net.Conn) {
 
 	// 建立到目标服务器的连接
 
-	destConn, err := zdipfw("tcp6", fmt.Sprintf("%s:%d", destAddr, destPort), ipv6Addresses[counter.Increment()])
+	destConn, err := zdipfw("tcp6", fmt.Sprintf("[%s]:%d", destAddr, destPort), ipv6Addresses[counter.Increment()])
 
 	if err != nil {
 		fmt.Println("Error connecting to destination:", err)
@@ -179,12 +182,8 @@ func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	//deadline := time.Now().Add(35 * time.Second)
-	//conn.SetDeadline(deadline)
 	return conn, nil
 }
-
-var osName string
 
 func main() {
 	osName = runtime.GOOS
@@ -192,49 +191,60 @@ func main() {
 	// 判断操作系统类型
 	switch osName {
 	case "windows":
-		fmt.Println("当前操作系统是 Windows")
+		fmt.Println("System is Windows")
 	case "linux":
-		fmt.Println("当前操作系统是 Linux")
+		fmt.Println("System is Linux")
 	default:
-		fmt.Println("未知操作系统")
+		errhandling(fmt.Errorf("unknown system"))
 	}
 	// 加载INI配置文件
 
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
-		fmt.Println("无法加载INI配置文件:", err)
-		return
+		errhandling(err)
 	}
 
 	// 获取Networkname字段
 	section := cfg.Section("")
 	networkName := section.Key("Networkname").String()
+	port := section.Key("port").String()
+	if networkName == "" || port == "" {
+		fmt.Println("NetworkName:" + networkName)
+		fmt.Println("Port:" + port)
+		errhandling(fmt.Errorf("check config.ini"))
+	}
 	fmt.Println("Networkname:", networkName)
 	//获取前缀长度为64的公网地址
-	ya := get64(networkName)
-
+	ya, err := get64(networkName)
+	if err != nil {
+		errhandling(err)
+	}
 	// 获取当前的ipv6地址
 	ipv6Addresses, _ = getIPv6Addresses(networkName)
 	maxVal := len(ipv6Addresses)
 	counter = NewCounter(maxVal)
 	// 删除除了ya之外的ipv6地址
-	p := promptForYesNo("是否要删除当前除64位前缀以外的地址（谨慎操作）")
+	p := promptForYesNo("Remove addresses other than 64 prefix(!!!)")
 	if p {
-		fmt.Println("正在删除地址")
+		fmt.Println("Removing")
 		processIPv6Addresses(ipv6Addresses, networkName, ya)
-		fmt.Println("删除完成")
+		fmt.Println("Remove completed")
 	}
-	p = promptForYesNo("是否添加ipv6地址")
+	p = promptForYesNo("Add ipv6 address")
 	if p {
 		//生成地址
 		var userInput int
-		fmt.Print("添加的数量:")
+		fmt.Print("Add quantity:")
 		fmt.Scanf("%d", &userInput)
-		fmt.Println("添加地址中")
+		fmt.Println("Adding")
 		na := generateRandomIPv6Batch(ya[0], userInput)
+		progress := pb.StartNew(len(na))
 		for c := 0; c < len(na); c++ {
 			setaddres("add", networkName, na[c])
+			progress.Increment()
 		}
+		progress.Finish()
+		fmt.Println("Add completed")
 	}
 
 	//获取当前地址
@@ -243,7 +253,7 @@ func main() {
 	counter = NewCounter(maxVal)
 	fmt.Printf("You have %d IPv6 addresses.\n", len(ipv6Addresses))
 
-	listenAddr := "0.0.0.0:1080"
+	listenAddr := "0.0.0.0:" + port
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Println("Error starting proxy:", err)
@@ -283,24 +293,20 @@ func promptForYesNo(prompt string) bool {
 			return false
 		}
 
-		fmt.Println("请只输入 'y' 或 'n'")
+		fmt.Println("Please enter only 'y' or 'n'")
 	}
 }
-func get64(Networkname string) []string {
+func get64(Networkname string) ([]string, error) {
 	// 获取指定网络接口
 	iface, err := net.InterfaceByName(Networkname)
 	if err != nil {
-		fmt.Println("获取网络接口失败:", err)
-		return nil
+		return nil, fmt.Errorf("Failed to obtain network interface:" + err.Error())
 	}
-
-	//fmt.Println("接口名称:", iface.Name)
 
 	// 获取接口的地址信息
 	addrs, err := iface.Addrs()
 	if err != nil {
-		fmt.Println("获取地址信息失败:", err)
-		return nil
+		return nil, fmt.Errorf("Failed to obtain address information:" + err.Error())
 	}
 
 	// 遍历每个地址
@@ -312,13 +318,17 @@ func get64(Networkname string) []string {
 		if isFirstCharacterTwo(addrStr) {
 			fmt.Println("IPv6 地址:", addr)
 			if strings.HasSuffix(addrStr, "/64") {
-				//fmt.Println("IPv6 地址:", addr)
 				r = append(r, strings.TrimSuffix(addrStr, "/64"))
 			}
 		}
 
 	}
-	return r
+	if len(r) > 0 {
+		return r, nil
+	} else {
+		return nil, fmt.Errorf("no have 64 prefix ipv6 address")
+	}
+
 }
 
 // 运行cmd命令
@@ -328,7 +338,7 @@ func runCmd(command string) error {
 		cmd := exec.Command("cmd", "/c", command)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("命令运行失败: %v\n输出: %s", err, output)
+			return fmt.Errorf("failed to run command: %v\noutput: %s", err, output)
 		}
 		return nil
 	case "linux":
@@ -338,10 +348,8 @@ func runCmd(command string) error {
 		// 执行命令并获取输出
 		output, err := command.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("命令运行失败: %v\n输出: %s", err, output)
+			return fmt.Errorf("failed to run command: %v\noutput: %s", err, output)
 		}
-	default:
-		fmt.Println("未知操作系统")
 	}
 	return nil
 }
@@ -362,14 +370,12 @@ func setaddres(set, networkName, ipv6Address string) {
 		} else {
 			cmd = fmt.Sprintf(`ifconfig %s inet6 %s %s`, networkName, set, ipv6Address)
 		}
-	default:
-		fmt.Println("未知操作系统")
 	}
 
 	// 运行命令
 	err := runCmd(cmd)
 	if err != nil {
-		fmt.Println("运行命令失败:", err)
+		fmt.Println("Failed to run command:", err)
 		return
 	}
 }
@@ -377,6 +383,7 @@ func setaddres(set, networkName, ipv6Address string) {
 // 处理IPv6地址切片
 func processIPv6Addresses(ipv6Addresses []string, Networkname string, ya []string) {
 	// 遍历IPv6地址切片
+	progress := pb.StartNew(len(ipv6Addresses))
 	for _, address := range ipv6Addresses {
 		// 检查是否包含在ya切片中
 		found := false
@@ -386,15 +393,17 @@ func processIPv6Addresses(ipv6Addresses []string, Networkname string, ya []strin
 				break
 			}
 		}
-
 		// 如果包含在ya切片中，则跳过
 		if found {
+			progress.Increment()
 			continue
 		}
 
 		// 否则，执行操作
 		setaddres("del", Networkname, address)
+		progress.Increment()
 	}
+	progress.Finish()
 }
 
 // 生成具有相同64位前缀的随机IPv6地址
@@ -409,7 +418,6 @@ func generateRandomIPv6Batch(baseIPv6 string, count int) []string {
 	prefix := baseIP[:8]
 
 	// 生成随机的后64位
-	//rand.Seed(time.Now().UnixNano())
 	randomIPv6Addresses := make([]string, count)
 
 	for i := 0; i < count; i++ {
@@ -422,4 +430,11 @@ func generateRandomIPv6Batch(baseIPv6 string, count int) []string {
 	}
 
 	return randomIPv6Addresses
+}
+func errhandling(err error) {
+	fmt.Println(err.Error())
+	fmt.Printf("Press any key to exit...")
+	b := make([]byte, 1)
+	os.Stdin.Read(b)
+	os.Exit(1)
 }
