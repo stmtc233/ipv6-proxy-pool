@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cheggaaa/pb/v3"
 	"gopkg.in/ini.v1"
@@ -182,6 +183,8 @@ func zdipfw(netw, addr string, fwip string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	deadline := time.Now().Add(35 * time.Second)
+	conn.SetDeadline(deadline)
 	return conn, nil
 }
 
