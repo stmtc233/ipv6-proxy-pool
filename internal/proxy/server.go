@@ -19,6 +19,7 @@ type Server struct {
 	Source   pool.Source
 	Selector pool.Selector
 	Resolver *Resolver
+	Hosts    *Hosts // 自定义解析，优先于 DNS；可为 nil
 
 	RequireAuth bool // 只接受用户名/密码认证（hash 选择策略需要凭据）
 	AllowIPv4   bool // 允许 IPv4 目标（IPv4 字面量、只有 A 记录的域名），走系统默认 IPv4 出口
@@ -132,9 +133,20 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 
 var errIPv4Disabled = errors.New("IPv4 destination is not supported (set ipv4 = on to allow)")
 
-// resolve 返回目标地址以及是否为 IPv4。有 AAAA 记录时总是使用 IPv6（走地址池）；
-// 只有在 AllowIPv4 时，IPv4 字面量和只有 A 记录的域名才会以 IPv4 返回。
+// resolve 返回目标地址以及是否为 IPv4。有 IPv6 地址时总是使用 IPv6（走地址池）；
+// 只有在 AllowIPv4 时，IPv4 字面量和只有 IPv4 地址的域名才会以 IPv4 返回。
+// 解析顺序：IP 字面量 > hosts 文件 > DNS。
 func (s *Server) resolve(ctx context.Context, host string) ([]net.IP, bool, error) {
+	if v6, v4, ok := s.Hosts.Lookup(host); ok {
+		switch {
+		case len(v6) > 0:
+			return v6, false, nil
+		case !s.AllowIPv4:
+			return nil, true, errIPv4Disabled
+		default:
+			return v4, true, nil
+		}
+	}
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.To4() == nil {
 			return []net.IP{ip}, false, nil

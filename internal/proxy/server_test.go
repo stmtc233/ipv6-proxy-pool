@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,10 @@ import (
 )
 
 func startProxy(t *testing.T, allowIPv4 bool) string {
+	return startProxyWithHosts(t, allowIPv4, nil)
+}
+
+func startProxyWithHosts(t *testing.T, allowIPv4 bool, hosts *Hosts) string {
 	t.Helper()
 	src, err := pool.NewNIC([]net.IP{net.IPv6loopback})
 	if err != nil {
@@ -27,6 +32,7 @@ func startProxy(t *testing.T, allowIPv4 bool) string {
 		Selector:         &pool.Sequential{},
 		Resolver:         NewResolver(time.Minute, 16),
 		AllowIPv4:        allowIPv4,
+		Hosts:            hosts,
 		HandshakeTimeout: 200 * time.Millisecond,
 		DialTimeout:      2 * time.Second,
 		KeepAlive:        30 * time.Second,
@@ -87,6 +93,31 @@ func TestIPv4Allowed(t *testing.T) {
 	port := startEcho(echo)
 	c, code := connect(t, startProxy(t, true), socks5.AtypIPv4, []byte{127, 0, 0, 1}, port)
 	checkEcho(t, c, code)
+}
+
+// hosts 文件中的域名优先于 DNS 解析
+func TestHostsOverride(t *testing.T) {
+	echo, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := startEcho(echo)
+	hosts, err := ParseHosts(strings.NewReader("127.0.0.1 my.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := startProxyWithHosts(t, true, hosts)
+	name := []byte("my.test")
+	c, code := connect(t, addr, socks5.AtypDomain, append([]byte{byte(len(name))}, name...), port)
+	checkEcho(t, c, code)
+
+	// 关闭 IPv4 兼容时，只有 IPv4 地址的 hosts 条目被拒绝
+	addr = startProxyWithHosts(t, false, hosts)
+	c, code = connect(t, addr, socks5.AtypDomain, append([]byte{byte(len(name))}, name...), port)
+	c.Close()
+	if code != socks5.ReplyAddrTypeNotSupported {
+		t.Errorf("ipv4 off: got %#x", code)
+	}
 }
 
 func startEcho(echo net.Listener) int {

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"runtime"
@@ -25,6 +27,7 @@ const (
 	keepAlive        = 30 * time.Second
 	dnsTTL           = 60 * time.Second
 	dnsMaxEntries    = 10000
+	defaultHostsPath = "hosts"
 )
 
 // 整个程序共用一个 stdin reader，避免多个缓冲 reader 互相吞掉输入
@@ -67,6 +70,7 @@ func main() {
 	mode := section.Key("mode").MustString(pool.ModeNIC)
 	selectName := section.Key("select").MustString(pool.SelectSequential)
 	prefixStr := section.Key("prefix").String() // anyipv6 使用的前缀，留空则从网卡获取
+	hostsPath := section.Key("hosts").MustString(defaultHostsPath)
 	// 只有 anyipv6 且自定义了前缀时才不需要网卡名
 	if networkName == "" && (mode != pool.ModeAnyIPv6 || prefixStr == "") {
 		errhandling(fmt.Errorf("check config.ini: Networkname is required"))
@@ -92,6 +96,11 @@ func main() {
 		errhandling(err)
 	}
 
+	hosts, err := loadHosts(hostsPath)
+	if err != nil {
+		errhandling(err)
+	}
+
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Println("Error starting proxy:", err)
@@ -107,6 +116,7 @@ func main() {
 		RequireAuth:      selectName == pool.SelectHash,
 		AllowIPv4:        ipv4 == "on",
 		Resolver:         proxy.NewResolver(dnsTTL, dnsMaxEntries),
+		Hosts:            hosts,
 		HandshakeTimeout: handshakeTimeout,
 		DialTimeout:      dialTimeout,
 		KeepAlive:        keepAlive,
@@ -226,6 +236,19 @@ func prefixAddrs(addrs []*net.IPNet) []*net.IPNet {
 		}
 	}
 	return r
+}
+
+// loadHosts 读取 hosts 文件；默认路径的文件不存在时跳过，自定义路径不存在则报错
+func loadHosts(path string) (*proxy.Hosts, error) {
+	hosts, err := proxy.LoadHosts(path)
+	if errors.Is(err, fs.ErrNotExist) && path == defaultHostsPath {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Loaded %d domains from %s\n", hosts.Len(), path)
+	return hosts, nil
 }
 
 func runWithProgress(total int, fn func(progress func(int)) error) {

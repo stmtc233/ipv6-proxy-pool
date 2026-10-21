@@ -16,6 +16,7 @@ internal/pool           出口地址池：Source / Selector 接口及实现、�
 internal/proxy          服务端：Accept 循环、拨号、双向转发、AAAA 缓存
 internal/netif          网卡操作：读取地址、增删地址、freebind、local 路由（按平台分文件）
 config.ini              默认配置，随 Release 一起发布
+hosts                   自定义域名解析示例（全部为注释），随 Release 一起发布
 .github/workflows       Release 时用 go-release-action 交叉编译 linux/amd64、linux/arm64、windows/amd64
 ```
 
@@ -30,6 +31,7 @@ config.ini              默认配置，随 Release 一起发布
   - `AnyIP`：用 `Key` 填充前缀主机位（`AddrInPrefix`），支持任意前缀长度
 - 需要在拨号前设置 socket 选项的 Source 实现 `pool.Controller`（`AnyIP` 用它设置 freebind），
   `proxy.Server` 会自动挂到 `net.Dialer.Control`
+- 目标解析顺序（`Server.resolve`）：IP 字面量 > hosts 文件（`proxy.Hosts`，每次返回打乱顺序的副本）> DNS（`proxy.Resolver`，带缓存）
 - IPv4 兼容（`Server.AllowIPv4`）不经过地址池：IPv4 目标用 `tcp4` 走系统默认出口；有 AAAA 记录的域名始终走 IPv6
 - 新增模式时：在 `pool` 中实现接口，在 `pool.NewSelector` 或 `main.go` 的 `mode` 分支注册，
   同步更新 `config.ini` 注释和 `README.md`
