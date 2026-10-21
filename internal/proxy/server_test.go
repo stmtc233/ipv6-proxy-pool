@@ -1,0 +1,126 @@
+package proxy
+
+import (
+	"bytes"
+	"io"
+	"net"
+	"testing"
+	"time"
+
+	"gosdl/internal/pool"
+	"gosdl/internal/socks5"
+)
+
+func startProxy(t *testing.T) string {
+	t.Helper()
+	src, err := pool.NewNIC([]net.IP{net.IPv6loopback})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	srv := &Server{
+		Source:           src,
+		Selector:         &pool.Sequential{},
+		Resolver:         NewResolver(time.Minute, 16),
+		HandshakeTimeout: 200 * time.Millisecond,
+		DialTimeout:      2 * time.Second,
+		KeepAlive:        30 * time.Second,
+	}
+	go srv.Serve(ln)
+	return ln.Addr().String()
+}
+
+// connect 逐字节发送握手，验证服务端不依赖单次 Read 拿到完整报文
+func connect(t *testing.T, proxyAddr string, atyp byte, addr []byte, port int) (net.Conn, byte) {
+	t.Helper()
+	c, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := []byte{5, 1, 0, 5, 1, 0, atyp}
+	msg = append(msg, addr...)
+	msg = append(msg, byte(port>>8), byte(port))
+	for i := 0; i < 3; i++ {
+		c.Write(msg[i : i+1])
+		time.Sleep(5 * time.Millisecond)
+	}
+	method := make([]byte, 2)
+	if _, err := io.ReadFull(c, method); err != nil || method[1] != 0 {
+		t.Fatalf("method reply %v %v", method, err)
+	}
+	for _, b := range msg[3:] {
+		c.Write([]byte{b})
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	rest := 4 + 2
+	if hdr[3] == socks5.AtypIPv6 {
+		rest = 16 + 2
+	}
+	io.ReadFull(c, make([]byte, rest))
+	return c, hdr[1]
+}
+
+func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
+	echo, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	defer echo.Close()
+	go func() {
+		c, err := echo.Accept()
+		if err != nil {
+			return
+		}
+		io.Copy(c, c) // 读到 EOF 后再关闭，验证半关闭被正确传递
+		c.Close()
+	}()
+
+	port := echo.Addr().(*net.TCPAddr).Port
+	c, code := connect(t, startProxy(t), socks5.AtypIPv6, net.IPv6loopback, port)
+	defer c.Close()
+	if code != socks5.ReplySucceeded {
+		t.Fatalf("reply code %#x", code)
+	}
+
+	// 空闲超过握手超时，连接不应被断开
+	time.Sleep(500 * time.Millisecond)
+	payload := bytes.Repeat([]byte("x"), 1<<20)
+	go func() {
+		c.Write(payload)
+		c.(*net.TCPConn).CloseWrite()
+	}()
+	got, err := io.ReadAll(c)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("echo mismatch: len=%d err=%v", len(got), err)
+	}
+}
+
+func TestReplyCodes(t *testing.T) {
+	addr := startProxy(t)
+
+	c, code := connect(t, addr, socks5.AtypIPv4, []byte{1, 2, 3, 4}, 80)
+	c.Close()
+	if code != socks5.ReplyAddrTypeNotSupported {
+		t.Errorf("IPv4: got %#x", code)
+	}
+
+	// 找一个没有监听的端口
+	l, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	c, code = connect(t, addr, socks5.AtypIPv6, net.IPv6loopback, port)
+	c.Close()
+	if code != socks5.ReplyConnectionRefused {
+		t.Errorf("refused: got %#x", code)
+	}
+}
