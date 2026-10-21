@@ -49,19 +49,30 @@ func main() {
 	section := cfg.Section("")
 	networkName := section.Key("Networkname").String()
 	port := section.Key("port").String()
+	// 监听地址：只写主机（如 0.0.0.0、::、127.0.0.1）时与 port 组合；也可直接写 host:port
+	listen := section.Key("listen").MustString("0.0.0.0")
+	listenAddr := listen
+	if _, _, err := net.SplitHostPort(listen); err != nil {
+		if port == "" {
+			errhandling(fmt.Errorf("check config.ini: port is required when listen has no port"))
+		}
+		listenAddr = net.JoinHostPort(listen, port)
+	}
+	// IPv4 兼容：off 拒绝 IPv4 目标（默认）；on 允许，走系统默认 IPv4 出口
+	ipv4 := section.Key("ipv4").MustString("off")
+	if ipv4 != "off" && ipv4 != "on" {
+		errhandling(fmt.Errorf("check config.ini: ipv4 must be off or on, got %q", ipv4))
+	}
 	// 地址来源 mode = nic | anyipv6，选择策略 select = sequential | random | hash
 	mode := section.Key("mode").MustString(pool.ModeNIC)
 	selectName := section.Key("select").MustString(pool.SelectSequential)
 	prefixStr := section.Key("prefix").String() // anyipv6 使用的前缀，留空则从网卡获取
 	// 只有 anyipv6 且自定义了前缀时才不需要网卡名
-	needNetwork := mode != pool.ModeAnyIPv6 || prefixStr == ""
-	if (needNetwork && networkName == "") || port == "" {
-		fmt.Println("NetworkName:" + networkName)
-		fmt.Println("Port:" + port)
-		errhandling(fmt.Errorf("check config.ini"))
+	if networkName == "" && (mode != pool.ModeAnyIPv6 || prefixStr == "") {
+		errhandling(fmt.Errorf("check config.ini: Networkname is required"))
 	}
 	fmt.Println("Networkname:", networkName)
-	fmt.Println("Mode:", mode, "Select:", selectName)
+	fmt.Println("Mode:", mode, "Select:", selectName, "IPv4:", ipv4)
 
 	selector, err := pool.NewSelector(selectName)
 	if err != nil {
@@ -81,7 +92,6 @@ func main() {
 		errhandling(err)
 	}
 
-	listenAddr := "0.0.0.0:" + port
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Println("Error starting proxy:", err)
@@ -95,6 +105,7 @@ func main() {
 		Source:           source,
 		Selector:         selector,
 		RequireAuth:      selectName == pool.SelectHash,
+		AllowIPv4:        ipv4 == "on",
 		Resolver:         proxy.NewResolver(dnsTTL, dnsMaxEntries),
 		HandshakeTimeout: handshakeTimeout,
 		DialTimeout:      dialTimeout,

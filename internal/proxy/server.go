@@ -21,6 +21,7 @@ type Server struct {
 	Resolver *Resolver
 
 	RequireAuth bool // 只接受用户名/密码认证（hash 选择策略需要凭据）
+	AllowIPv4   bool // 允许 IPv4 目标（IPv4 字面量、只有 A 记录的域名），走系统默认 IPv4 出口
 
 	HandshakeTimeout time.Duration // 握手阶段的读写超时，防止慢连接占用资源
 	DialTimeout      time.Duration // 连接目标的总超时（含多个 AAAA 地址的重试）
@@ -84,27 +85,28 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 	ctx, cancel := context.WithTimeout(context.Background(), s.DialTimeout)
 	defer cancel()
 
-	var ips []net.IP
-	if ip := net.ParseIP(req.Host); ip != nil {
-		if ip.To4() != nil {
-			return nil, socks5.ReplyAddrTypeNotSupported, errors.New("IPv4 destination is not supported")
+	ips, v4, err := s.resolve(ctx, req.Host)
+	if err != nil {
+		if errors.Is(err, errIPv4Disabled) {
+			return nil, socks5.ReplyAddrTypeNotSupported, err
 		}
-		ips = []net.IP{ip}
-	} else {
-		var err error
-		if ips, err = s.Resolver.LookupIP6(ctx, req.Host); err != nil {
-			return nil, socks5.ReplyHostUnreachable, err
-		}
+		return nil, socks5.ReplyHostUnreachable, err
 	}
 
-	local := s.Source.Pick(s.Selector.Key(&pool.Client{
-		Username: req.Username,
-		Password: req.Password,
-		Addr:     from,
-	}))
-	d := net.Dialer{LocalAddr: local, KeepAlive: s.KeepAlive}
-	if c, ok := s.Source.(pool.Controller); ok {
-		d.Control = c.Control
+	network := "tcp6"
+	d := net.Dialer{KeepAlive: s.KeepAlive}
+	if v4 {
+		// 地址池只有 IPv6，IPv4 走系统默认出口
+		network = "tcp4"
+	} else {
+		d.LocalAddr = s.Source.Pick(s.Selector.Key(&pool.Client{
+			Username: req.Username,
+			Password: req.Password,
+			Addr:     from,
+		}))
+		if c, ok := s.Source.(pool.Controller); ok {
+			d.Control = c.Control
+		}
 	}
 	port := strconv.Itoa(req.Port)
 
@@ -115,7 +117,7 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 		if deadline, ok := ctx.Deadline(); ok && i < len(ips)-1 {
 			attemptCtx, attemptCancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(ips)-i))
 		}
-		conn, err := d.DialContext(attemptCtx, "tcp6", net.JoinHostPort(ip.String(), port))
+		conn, err := d.DialContext(attemptCtx, network, net.JoinHostPort(ip.String(), port))
 		attemptCancel()
 		if err == nil {
 			return conn.(*net.TCPConn), socks5.ReplySucceeded, nil
@@ -126,6 +128,31 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 		}
 	}
 	return nil, replyCode(lastErr), lastErr
+}
+
+var errIPv4Disabled = errors.New("IPv4 destination is not supported (set ipv4 = on to allow)")
+
+// resolve 返回目标地址以及是否为 IPv4。有 AAAA 记录时总是使用 IPv6（走地址池）；
+// 只有在 AllowIPv4 时，IPv4 字面量和只有 A 记录的域名才会以 IPv4 返回。
+func (s *Server) resolve(ctx context.Context, host string) ([]net.IP, bool, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() == nil {
+			return []net.IP{ip}, false, nil
+		}
+		if !s.AllowIPv4 {
+			return nil, true, errIPv4Disabled
+		}
+		return []net.IP{ip}, true, nil
+	}
+
+	ips, err := s.Resolver.Lookup(ctx, "ip6", host)
+	if err == nil || !s.AllowIPv4 {
+		return ips, false, err
+	}
+	if ips4, err4 := s.Resolver.Lookup(ctx, "ip4", host); err4 == nil {
+		return ips4, true, nil
+	}
+	return nil, false, err
 }
 
 func replyCode(err error) byte {

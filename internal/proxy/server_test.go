@@ -11,7 +11,7 @@ import (
 	"gosdl/internal/socks5"
 )
 
-func startProxy(t *testing.T) string {
+func startProxy(t *testing.T, allowIPv4 bool) string {
 	t.Helper()
 	src, err := pool.NewNIC([]net.IP{net.IPv6loopback})
 	if err != nil {
@@ -26,6 +26,7 @@ func startProxy(t *testing.T) string {
 		Source:           src,
 		Selector:         &pool.Sequential{},
 		Resolver:         NewResolver(time.Minute, 16),
+		AllowIPv4:        allowIPv4,
 		HandshakeTimeout: 200 * time.Millisecond,
 		DialTimeout:      2 * time.Second,
 		KeepAlive:        30 * time.Second,
@@ -72,7 +73,23 @@ func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
 	if err != nil {
 		t.Skip("no IPv6 loopback:", err)
 	}
-	defer echo.Close()
+	port := startEcho(echo)
+	c, code := connect(t, startProxy(t, false), socks5.AtypIPv6, net.IPv6loopback, port)
+	checkEcho(t, c, code)
+}
+
+// IPv4 兼容开启时，IPv4 目标走系统默认出口
+func TestIPv4Allowed(t *testing.T) {
+	echo, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := startEcho(echo)
+	c, code := connect(t, startProxy(t, true), socks5.AtypIPv4, []byte{127, 0, 0, 1}, port)
+	checkEcho(t, c, code)
+}
+
+func startEcho(echo net.Listener) int {
 	go func() {
 		c, err := echo.Accept()
 		if err != nil {
@@ -80,10 +97,13 @@ func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
 		}
 		io.Copy(c, c) // 读到 EOF 后再关闭，验证半关闭被正确传递
 		c.Close()
+		echo.Close()
 	}()
+	return echo.Addr().(*net.TCPAddr).Port
+}
 
-	port := echo.Addr().(*net.TCPAddr).Port
-	c, code := connect(t, startProxy(t), socks5.AtypIPv6, net.IPv6loopback, port)
+func checkEcho(t *testing.T, c net.Conn, code byte) {
+	t.Helper()
 	defer c.Close()
 	if code != socks5.ReplySucceeded {
 		t.Fatalf("reply code %#x", code)
@@ -103,7 +123,7 @@ func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
 }
 
 func TestReplyCodes(t *testing.T) {
-	addr := startProxy(t)
+	addr := startProxy(t, false)
 
 	c, code := connect(t, addr, socks5.AtypIPv4, []byte{1, 2, 3, 4}, 80)
 	c.Close()
