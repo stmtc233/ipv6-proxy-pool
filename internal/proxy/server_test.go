@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -51,6 +52,20 @@ func startServer(t *testing.T, srv *Server) string {
 	return ln.Addr().String()
 }
 
+// listenIPv6 监听 IPv6 回环。没有 IPv6 的环境（很多容器）跳过；
+// CI 中（GitHub Actions 设置了 CI 环境变量，runner 有 IPv6 回环）直接失败，避免用例被悄悄跳过
+func listenIPv6(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("no IPv6 loopback in CI:", err)
+		}
+		t.Skip("no IPv6 loopback:", err)
+	}
+	return ln
+}
+
 // connect 逐字节发送握手，验证服务端不依赖单次 Read 拿到完整报文
 func connect(t *testing.T, proxyAddr string, atyp byte, addr []byte, port int) (net.Conn, byte) {
 	t.Helper()
@@ -85,10 +100,7 @@ func connect(t *testing.T, proxyAddr string, atyp byte, addr []byte, port int) (
 }
 
 func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
-	echo, err := net.Listen("tcp6", "[::1]:0")
-	if err != nil {
-		t.Skip("no IPv6 loopback:", err)
-	}
+	echo := listenIPv6(t)
 	port := startEcho(echo)
 	c, code := connect(t, startProxy(t, false), socks5.AtypIPv6, net.IPv6loopback, port)
 	checkEcho(t, c, code)
@@ -107,10 +119,7 @@ func (s slowSource) Control(network, address string, c syscall.RawConn) error {
 
 // 握手加拨号超过握手超时时，应答仍要能写回客户端
 func TestSlowDial(t *testing.T) {
-	echo, err := net.Listen("tcp6", "[::1]:0")
-	if err != nil {
-		t.Skip("no IPv6 loopback:", err)
-	}
+	echo := listenIPv6(t)
 	port := startEcho(echo)
 	srv := newTestServer(t, false)
 	srv.Source = slowSource{srv.Source, 2 * srv.HandshakeTimeout}
@@ -197,10 +206,7 @@ func TestReplyCodes(t *testing.T) {
 	}
 
 	// 找一个没有监听的端口
-	l, err := net.Listen("tcp6", "[::1]:0")
-	if err != nil {
-		t.Skip("no IPv6 loopback:", err)
-	}
+	l := listenIPv6(t)
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	c, code = connect(t, addr, socks5.AtypIPv6, net.IPv6loopback, port)

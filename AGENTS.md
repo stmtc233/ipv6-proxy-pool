@@ -78,7 +78,8 @@ done
 ## 测试
 
 - `internal/pool`、`internal/socks5` 的单元测试不依赖网络
-- `internal/proxy/server_test.go` 中 IPv6 相关用例需要 IPv6 回环；没有 IPv6 的环境（很多容器）会自动 Skip，不代表通过。GitHub Actions 的 runner 有 IPv6 回环，会实际运行
+- `internal/proxy/server_test.go` 中 IPv6 相关用例需要 IPv6 回环（`listenIPv6`）；没有 IPv6 的环境（很多容器）会自动 Skip，不代表通过。
+  设置了 `CI` 环境变量时（GitHub Actions）没有 IPv6 直接失败，保证这些用例在 CI 中一定实际运行
 - 增删网卡地址、local 路由、anyipv6 实际转发需要 root 和真实 IPv6 网络，无法在 CI 中验证；改动这部分时在说明中注明未经实机验证的内容
 
 ## 安全
