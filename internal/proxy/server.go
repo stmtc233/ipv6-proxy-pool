@@ -20,6 +20,8 @@ type Server struct {
 	Selector pool.Selector
 	Resolver *Resolver
 
+	RequireAuth bool // 只接受用户名/密码认证（hash 选择策略需要凭据）
+
 	HandshakeTimeout time.Duration // 握手阶段的读写超时，防止慢连接占用资源
 	DialTimeout      time.Duration // 连接目标的总超时（含多个 AAAA 地址的重试）
 	KeepAlive        time.Duration // 两端 TCP keepalive 周期，用于发现死连接
@@ -54,7 +56,7 @@ func (s *Server) handle(client *net.TCPConn) {
 	client.SetKeepAlivePeriod(s.KeepAlive)
 
 	client.SetDeadline(time.Now().Add(s.HandshakeTimeout))
-	req, err := socks5.ReadRequest(client)
+	req, err := socks5.ReadRequest(client, s.RequireAuth)
 	if err != nil {
 		logErr("Error reading SOCKS request", err)
 		return
@@ -101,6 +103,9 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 		Addr:     from,
 	}))
 	d := net.Dialer{LocalAddr: local, KeepAlive: s.KeepAlive}
+	if c, ok := s.Source.(pool.Controller); ok {
+		d.Control = c.Control
+	}
 	port := strconv.Itoa(req.Port)
 
 	var lastErr error

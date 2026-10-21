@@ -6,6 +6,9 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // ip -batch 每批的命令数，只影响进度条刷新粒度
@@ -65,4 +68,25 @@ func ipBatch(lines []string, progress func(int)) error {
 		return fmt.Errorf("%d batch(es) reported errors, first error: %v", failed, first)
 	}
 	return nil
+}
+
+// FreeBind 作为 net.Dialer.Control 使用：允许 bind 到未配置在网卡上的地址（anyipv6 模式）。
+// IPV6_FREEBIND 需要 Linux 4.15+，更早的内核回退到 IP_FREEBIND（对 IPv6 socket 同样生效）。
+func FreeBind(network, address string, c syscall.RawConn) error {
+	var serr error
+	err := c.Control(func(fd uintptr) {
+		serr = unix.SetsockoptInt(int(fd), unix.SOL_IPV6, unix.IPV6_FREEBIND, 1)
+		if serr != nil {
+			serr = unix.SetsockoptInt(int(fd), unix.SOL_IP, unix.IP_FREEBIND, 1)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return serr
+}
+
+// AddLocalRoute 添加 local 路由，让发往整个前缀的回包被本机接收
+func AddLocalRoute(prefix *net.IPNet) error {
+	return run("ip", "-6", "route", "replace", "local", prefix.String(), "dev", "lo")
 }

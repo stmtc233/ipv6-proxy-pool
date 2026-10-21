@@ -15,8 +15,10 @@ const Version5 = 0x05
 // 认证方式
 const (
 	MethodNoAuth       = 0x00
-	MethodUserPass     = 0x02 // 预留：用户名/密码认证（RFC 1929）
+	MethodUserPass     = 0x02 // 用户名/密码认证（RFC 1929）
 	MethodNoAcceptable = 0xFF
+
+	userPassVersion = 0x01
 )
 
 const CmdConnect = 0x01
@@ -45,7 +47,7 @@ var ErrNoAcceptableMethod = errors.New("socks5: no acceptable authentication met
 
 // Request 是一次完整握手后得到的连接请求
 type Request struct {
-	// 预留：启用用户名/密码认证后填充，供"按用户名/密码锁定 IP"的选择器使用
+	// 客户端使用用户名/密码认证时填充，供"按用户名/密码锁定 IP"的选择器使用
 	Username string
 	Password string
 
@@ -60,11 +62,11 @@ func (r *Request) Address() string {
 	return net.JoinHostPort(r.Host, strconv.Itoa(r.Port))
 }
 
-// ReadRequest 完成认证协商并读取连接请求。
+// ReadRequest 完成认证协商并读取连接请求。requireAuth 为 true 时只接受用户名/密码认证。
 // 使用 io.ReadFull 按协议字段长度读取，不依赖单次 Read 拿到完整报文。
-func ReadRequest(rw io.ReadWriter) (*Request, error) {
+func ReadRequest(rw io.ReadWriter, requireAuth bool) (*Request, error) {
 	req := &Request{}
-	if err := negotiate(rw, req); err != nil {
+	if err := negotiate(rw, req, requireAuth); err != nil {
 		return nil, err
 	}
 
@@ -122,7 +124,7 @@ func ReadRequest(rw io.ReadWriter) (*Request, error) {
 	return req, nil
 }
 
-func negotiate(rw io.ReadWriter, req *Request) error {
+func negotiate(rw io.ReadWriter, req *Request, requireAuth bool) error {
 	var hdr [2]byte
 	if _, err := io.ReadFull(rw, hdr[:]); err != nil {
 		return err
@@ -134,15 +136,57 @@ func negotiate(rw io.ReadWriter, req *Request) error {
 	if _, err := io.ReadFull(rw, methods); err != nil {
 		return err
 	}
-
-	// TODO: "按用户名/密码锁定 IP" 模式需要在这里支持 MethodUserPass（RFC 1929），
-	// 完成子协商后填充 req.Username / req.Password。
-	if bytes.IndexByte(methods, MethodNoAuth) < 0 {
-		rw.Write([]byte{Version5, MethodNoAcceptable})
-		return ErrNoAcceptableMethod
+	// 不强制认证时优先无认证；客户端只提供用户名/密码时也接受，并记录凭据
+	method := byte(MethodNoAcceptable)
+	switch {
+	case !requireAuth && bytes.IndexByte(methods, MethodNoAuth) >= 0:
+		method = MethodNoAuth
+	case bytes.IndexByte(methods, MethodUserPass) >= 0:
+		method = MethodUserPass
 	}
-	_, err := rw.Write([]byte{Version5, MethodNoAuth})
+	if _, err := rw.Write([]byte{Version5, method}); err != nil {
+		return err
+	}
+	switch method {
+	case MethodNoAcceptable:
+		return ErrNoAcceptableMethod
+	case MethodUserPass:
+		return readUserPass(rw, req)
+	}
+	return nil
+}
+
+// readUserPass 完成用户名/密码子协商（RFC 1929）。不校验凭据，只记录下来供选择器使用。
+func readUserPass(rw io.ReadWriter, req *Request) error {
+	var ver [1]byte
+	if _, err := io.ReadFull(rw, ver[:]); err != nil {
+		return err
+	}
+	if ver[0] != userPassVersion {
+		return fmt.Errorf("socks5: unsupported auth version %#x", ver[0])
+	}
+	var err error
+	if req.Username, err = readString(rw); err != nil {
+		return err
+	}
+	if req.Password, err = readString(rw); err != nil {
+		return err
+	}
+	_, err = rw.Write([]byte{userPassVersion, 0x00})
 	return err
+}
+
+// readString 读取一个单字节长度前缀的字符串
+func readString(r io.Reader) (string, error) {
+	var l [1]byte
+	if _, err := io.ReadFull(r, l[:]); err != nil {
+		return "", err
+	}
+	b := make([]byte, l[0])
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // WriteReply 发送应答。bound 为 nil 或非 IPv6 时以 0.0.0.0:0 作为绑定地址。

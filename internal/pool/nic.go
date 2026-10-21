@@ -22,8 +22,8 @@ func NewNIC(ips []net.IP) (*NIC, error) {
 	return &NIC{addrs: addrs}, nil
 }
 
-func (n *NIC) Pick(key uint64) *net.TCPAddr {
-	return n.addrs[key%uint64(len(n.addrs))]
+func (n *NIC) Pick(k Key) *net.TCPAddr {
+	return n.addrs[k.Lo%uint64(len(n.addrs))]
 }
 
 func (n *NIC) Len() int {

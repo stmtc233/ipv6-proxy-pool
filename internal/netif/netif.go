@@ -3,7 +3,6 @@ package netif
 
 import (
 	"bytes"
-	"crypto/rand"
 	"fmt"
 	"net"
 	"os/exec"
@@ -33,25 +32,6 @@ func GlobalIPv6(name string) ([]*net.IPNet, error) {
 		}
 	}
 	return r, nil
-}
-
-// GenerateInPrefix64 生成 count 个与 base 同一 /64 前缀的随机地址
-func GenerateInPrefix64(base net.IP, count int) []net.IP {
-	base = base.To16()
-	if base == nil || count <= 0 {
-		return nil
-	}
-	suffixes := make([]byte, 8*count)
-	rand.Read(suffixes)
-
-	ips := make([]net.IP, count)
-	for i := range ips {
-		ip := make(net.IP, net.IPv6len)
-		copy(ip, base[:8])
-		copy(ip[8:], suffixes[i*8:])
-		ips[i] = ip
-	}
-	return ips
 }
 
 func run(name string, args ...string) error {
