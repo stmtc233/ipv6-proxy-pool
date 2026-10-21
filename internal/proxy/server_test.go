@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,26 +18,35 @@ func startProxy(t *testing.T, allowIPv4 bool) string {
 }
 
 func startProxyWithHosts(t *testing.T, allowIPv4 bool, hosts *Hosts) string {
+	srv := newTestServer(t, allowIPv4)
+	srv.Hosts = hosts
+	return startServer(t, srv)
+}
+
+func newTestServer(t *testing.T, allowIPv4 bool) *Server {
 	t.Helper()
 	src, err := pool.NewNIC([]net.IP{net.IPv6loopback})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return &Server{
+		Source:           src,
+		Selector:         &pool.Sequential{},
+		Resolver:         NewResolver(time.Minute, 16),
+		AllowIPv4:        allowIPv4,
+		HandshakeTimeout: 200 * time.Millisecond,
+		DialTimeout:      5 * time.Second, // Windows 收到 RST 后会重试，拒绝连接约需 2 秒
+		KeepAlive:        30 * time.Second,
+	}
+}
+
+func startServer(t *testing.T, srv *Server) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	srv := &Server{
-		Source:           src,
-		Selector:         &pool.Sequential{},
-		Resolver:         NewResolver(time.Minute, 16),
-		AllowIPv4:        allowIPv4,
-		Hosts:            hosts,
-		HandshakeTimeout: 200 * time.Millisecond,
-		DialTimeout:      5 * time.Second, // Windows 收到 RST 后会重试，拒绝连接约需 2 秒
-		KeepAlive:        30 * time.Second,
-	}
 	go srv.Serve(ln)
 	return ln.Addr().String()
 }
@@ -81,6 +91,30 @@ func TestRelayHalfCloseAndNoDeadline(t *testing.T) {
 	}
 	port := startEcho(echo)
 	c, code := connect(t, startProxy(t, false), socks5.AtypIPv6, net.IPv6loopback, port)
+	checkEcho(t, c, code)
+}
+
+// slowSource 在拨号前阻塞，模拟耗时较长的拨号
+type slowSource struct {
+	pool.Source
+	delay time.Duration
+}
+
+func (s slowSource) Control(network, address string, c syscall.RawConn) error {
+	time.Sleep(s.delay)
+	return nil
+}
+
+// 握手加拨号超过握手超时时，应答仍要能写回客户端
+func TestSlowDial(t *testing.T) {
+	echo, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	port := startEcho(echo)
+	srv := newTestServer(t, false)
+	srv.Source = slowSource{srv.Source, 2 * srv.HandshakeTimeout}
+	c, code := connect(t, startServer(t, srv), socks5.AtypIPv6, net.IPv6loopback, port)
 	checkEcho(t, c, code)
 }
 

@@ -14,38 +14,66 @@ import (
 // ip -batch 每批的命令数，只影响进度条刷新粒度
 const ipBatchSize = 256
 
-// Add 以 /128 添加地址。有 iproute2 时用 ip -batch 批量执行，否则逐个调用 ifconfig。
+// addrTool 是管理网卡地址使用的命令
+type addrTool int
+
+const (
+	toolIPRoute2 addrTool = iota // iproute2：支持 -batch 批量执行和 nodad
+	toolIP                       // BusyBox 的 ip（如 Alpine 默认自带的）：不支持 -batch、-force、nodad，逐条执行
+	toolIfconfig                 // 没有 ip 命令时退回 ifconfig
+)
+
+func detectTool() addrTool {
+	if _, err := exec.LookPath("ip"); err != nil {
+		return toolIfconfig
+	}
+	// iproute2 的 ip -V 输出 "ip utility, iproute2-<版本>"；BusyBox 不认识 -V，只打印用法
+	if out, _ := exec.Command("ip", "-V").CombinedOutput(); bytes.Contains(out, []byte("iproute2")) {
+		return toolIPRoute2
+	}
+	return toolIP
+}
+
+// Add 以 /128 添加地址。iproute2 用 ip -batch 批量执行，其他情况逐个调用 ip 或 ifconfig。
 func Add(name string, ips []net.IP, progress func(int)) error {
-	if hasIP() {
+	switch detectTool() {
+	case toolIPRoute2:
 		lines := make([]string, len(ips))
 		for i, ip := range ips {
 			// nodad：跳过重复地址检测，地址立即可用于 bind，不会因 tentative 状态拨号失败
 			lines[i] = fmt.Sprintf("address add %s/128 dev %s nodad", ip, name)
 		}
 		return ipBatch(lines, progress)
+	case toolIP:
+		return runEach(len(ips), progress, func(i int) error {
+			return run("ip", "-6", "address", "add", ips[i].String()+"/128", "dev", name)
+		})
+	default:
+		// 不写 inet6 关键字：net-tools 和 BusyBox 的 ifconfig 都接受这种写法，BusyBox 不认识 inet6
+		return runEach(len(ips), progress, func(i int) error {
+			return run("ifconfig", name, "add", ips[i].String()+"/128")
+		})
 	}
-	return runEach(len(ips), progress, func(i int) error {
-		return run("ifconfig", name, "inet6", "add", ips[i].String()+"/128")
-	})
 }
 
 // Delete 删除地址。内核按地址和前缀长度匹配，因此带上原有的前缀长度。
 func Delete(name string, addrs []*net.IPNet, progress func(int)) error {
-	if hasIP() {
+	switch detectTool() {
+	case toolIPRoute2:
 		lines := make([]string, len(addrs))
 		for i, a := range addrs {
 			lines[i] = fmt.Sprintf("address del %s dev %s", a, name)
 		}
 		return ipBatch(lines, progress)
+	case toolIP:
+		return runEach(len(addrs), progress, func(i int) error {
+			return run("ip", "-6", "address", "del", addrs[i].String(), "dev", name)
+		})
+	default:
+		return runEach(len(addrs), progress, func(i int) error {
+			return run("ifconfig", name, "del", addrs[i].String())
+		})
 	}
-	return runEach(len(addrs), progress, func(i int) error {
-		return run("ifconfig", name, "inet6", "del", addrs[i].String())
-	})
-}
-
-func hasIP() bool {
-	_, err := exec.LookPath("ip")
-	return err == nil
 }
 
 func ipBatch(lines []string, progress func(int)) error {
@@ -86,7 +114,7 @@ func FreeBind(network, address string, c syscall.RawConn) error {
 	return serr
 }
 
-// AddLocalRoute 添加 local 路由，让发往整个前缀的回包被本机接收
+// AddLocalRoute 添加 local 路由，让发往整个前缀的回包被本机接收（iproute2 和 BusyBox 的 ip 都支持）
 func AddLocalRoute(prefix *net.IPNet) error {
 	return run("ip", "-6", "route", "replace", "local", prefix.String(), "dev", "lo")
 }

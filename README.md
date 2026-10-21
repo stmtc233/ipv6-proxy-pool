@@ -24,13 +24,13 @@ Linux 版本为静态编译，不依赖 glibc，可在 Alpine、OpenWrt 等系�
 - 可设置监听地址；可选 IPv4 兼容（IPv4 目标走系统默认出口）
 - 自定义 hosts 文件，一个域名可对应多个地址，请求时随机选择
 - 只在握手阶段设超时，长连接不会被断开；目标拨号有超时，域名解析结果有缓存
-- Linux 下转发走 splice 零拷贝；批量增删地址使用 `ip -batch`
+- Linux 下转发走 splice 零拷贝；有 iproute2 时用 `ip -batch` 批量增删地址
 
 ## 环境要求
 
 - 网卡上至少有一个公网 IPv6 地址，且前缀长度小于 128（如 `2001:db8::1/64`）
 - 修改网卡地址或路由需要 root / 管理员权限
-- Linux 推荐安装 iproute2（`ip` 命令）；没有时 `nic` 模式会退回逐个调用 `ifconfig`
+- Linux 推荐安装 iproute2：`nic` 模式用 `ip -batch` 批量增删地址，新地址立即可用。BusyBox 的 `ip`（如 Alpine 默认自带的）或 `ifconfig` 也能用，但只能逐个执行，地址多时较慢，且新地址要等约 1 秒的重复地址检测（DAD）后才能作为出口。`anyipv6` 模式需要 `ip` 命令添加路由
 - 默认只支持 IPv6 目标：IPv4 地址和只有 A 记录的域名会被拒绝，需要时可开启 [IPv4 兼容](#ipv4-兼容-ipv4)
 
 ## 快速开始
@@ -40,7 +40,7 @@ Linux 版本为静态编译，不依赖 glibc，可在 Alpine、OpenWrt 等系�
    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ipv6proxypool .
    ```
    查看版本：`./ipv6proxypool --version`
-2. 编辑与程序**同一目录**下的 `config.ini`，至少改好网卡名 `Networkname`
+2. 编辑 `config.ini`，至少改好网卡名 `Networkname`。程序从**当前工作目录**读取 `config.ini` 和 `hosts`，请先 `cd` 到程序所在目录再运行（用 systemd 等启动时设置 `WorkingDirectory`）
 3. 以 root / 管理员身份运行，按提示操作：
    ```bash
    sudo ./ipv6proxypool
@@ -130,7 +130,7 @@ hosts = hosts         ; 自定义域名解析文件
 
 ## hosts 文件 `hosts`
 
-默认读取与 `config.ini` 同目录下的 `hosts` 文件，不存在时跳过；用 `hosts = 路径` 指定其他文件（指定的文件不存在会报错）。只在启动时读取，修改后需要重启。
+默认读取当前工作目录（与 `config.ini` 相同）下的 `hosts` 文件，不存在时跳过；用 `hosts = 路径` 指定其他文件（指定的文件不存在会报错）。只在启动时读取，修改后需要重启。
 
 ```text
 # 地址[,地址...] 域名 [域名...]

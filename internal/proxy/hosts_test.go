@@ -51,6 +51,20 @@ func TestParseHostsErrors(t *testing.T) {
 	}
 }
 
+// 带 BOM 的文件（如示例 hosts 被 Windows 编辑器另存后）首行是注释时也要能解析
+func TestParseHostsBOM(t *testing.T) {
+	h, err := ParseHosts(strings.NewReader("\ufeff# 注释\r\n2001:db8::1 bom.test\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v6, _, ok := h.Lookup("bom.test"); !ok || len(v6) != 1 {
+		t.Errorf("bom.test: %v %v", v6, ok)
+	}
+	if _, err := ParseHosts(strings.NewReader("\ufeff2001:db8::1 bom.test")); err != nil {
+		t.Errorf("BOM before address: %v", err)
+	}
+}
+
 // 每次请求的首选地址应当是随机的
 func TestHostsLookupRandom(t *testing.T) {
 	h, _ := ParseHosts(strings.NewReader("2001:db8::1,2001:db8::2,2001:db8::3 r.test"))

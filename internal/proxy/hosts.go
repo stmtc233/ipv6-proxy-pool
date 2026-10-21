@@ -44,7 +44,11 @@ func ParseHosts(r io.Reader) (*Hosts, error) {
 	h := &Hosts{m: make(map[string]*hostEntry)}
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {
-		line, _, _ := strings.Cut(sc.Text(), "#")
+		text := sc.Text()
+		if n == 1 {
+			text = strings.TrimPrefix(text, "\ufeff") // 部分 Windows 编辑器保存的 UTF-8 带 BOM
+		}
+		line, _, _ := strings.Cut(text, "#")
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue

@@ -31,6 +31,11 @@ func randomKey() Key {
 type Hash struct{}
 
 func (Hash) Key(c *Client) Key {
-	sum := sha256.Sum256([]byte(c.Username + "\x00" + c.Password))
+	// 用户名前加长度：只用分隔符时，凭据本身含 \x00 就会出现两组凭据拼接结果相同
+	b := make([]byte, 0, binary.MaxVarintLen64+len(c.Username)+len(c.Password))
+	b = binary.AppendUvarint(b, uint64(len(c.Username)))
+	b = append(b, c.Username...)
+	b = append(b, c.Password...)
+	sum := sha256.Sum256(b)
 	return Key{Hi: binary.BigEndian.Uint64(sum[:8]), Lo: binary.BigEndian.Uint64(sum[8:16])}
 }

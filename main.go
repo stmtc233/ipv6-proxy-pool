@@ -163,7 +163,10 @@ func setupNIC(networkName string) (*pool.NIC, error) {
 			return netif.Delete(networkName, del, progress)
 		})
 		fmt.Println("Remove completed")
-		addrs = bases
+		// 重新读取而不是直接用 bases：部分删除失败时，残留的地址仍要在生成新地址时排除
+		if addrs, err = netif.GlobalIPv6(networkName); err != nil {
+			return nil, err
+		}
 	}
 
 	if promptForYesNo("Add ipv6 address") {

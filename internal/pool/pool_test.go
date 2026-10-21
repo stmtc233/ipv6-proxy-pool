@@ -95,8 +95,13 @@ func TestSelectors(t *testing.T) {
 	if a == h.Key(&Client{Username: "bob", Password: "x"}) {
 		t.Error("different users got the same key")
 	}
-	if h.Key(&Client{Username: "ab", Password: "c"}) == h.Key(&Client{Username: "a", Password: "bc"}) {
-		t.Error("username/password boundary is ambiguous")
+	for _, pair := range [][2]Client{
+		{{Username: "ab", Password: "c"}, {Username: "a", Password: "bc"}},
+		{{Username: "a\x00", Password: "b"}, {Username: "a", Password: "\x00b"}},
+	} {
+		if h.Key(&pair[0]) == h.Key(&pair[1]) {
+			t.Errorf("username/password boundary is ambiguous: %q", pair)
+		}
 	}
 
 	var r Random

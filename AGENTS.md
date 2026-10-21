@@ -64,6 +64,8 @@ done
 - 平台相关代码用文件名后缀或 `//go:build` 分文件（`netif_linux.go`、`netif_windows.go`、`netif_other.go`、`anyip_notlinux.go`），
   每个导出函数在所有平台都要有实现，保证交叉编译通过
 - 调用外部命令时直接 `exec.Command(name, args...)`，不要经过 shell 拼接
+- Linux 增删地址按 iproute2（`ip -batch`）> BusyBox `ip`（逐条）> `ifconfig` 的顺序选择（`netif.detectTool`）。
+  BusyBox 的 `ip` 不支持 `-batch`、`-force`、`-V`、`nodad`，BusyBox 的 `ifconfig` 不认识 `inet6` 关键字；改命令时两种实现都要兼容
 - 依赖保持精简，新增依赖前先确认标准库或 `golang.org/x/sys` 无法满足
 
 ## 性能相关的注意事项（热路径在 internal/proxy）

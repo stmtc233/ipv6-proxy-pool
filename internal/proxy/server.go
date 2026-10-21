@@ -64,6 +64,9 @@ func (s *Server) handle(client *net.TCPConn) {
 	}
 
 	dest, code, err := s.dial(req, client.RemoteAddr())
+	// 拨号有自己的超时，不占用握手超时：重新计时再写应答，否则握手加拨号超过 HandshakeTimeout 时
+	// 应答写不出去，客户端连失败原因都收不到
+	client.SetDeadline(time.Now().Add(s.HandshakeTimeout))
 	if err != nil {
 		socks5.WriteReply(client, code, nil)
 		log.Printf("Error connecting to %s: %v", req.Address(), err)
@@ -136,6 +139,15 @@ var errIPv4Disabled = errors.New("IPv4 destination is not supported (set ipv4 = 
 // 只有在 AllowIPv4 时，IPv4 字面量和只有 IPv4 地址的域名才会以 IPv4 返回。
 // 解析顺序：IP 字面量 > hosts 文件 > DNS。
 func (s *Server) resolve(ctx context.Context, host string) ([]net.IP, bool, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() == nil {
+			return []net.IP{ip}, false, nil
+		}
+		if !s.AllowIPv4 {
+			return nil, true, errIPv4Disabled
+		}
+		return []net.IP{ip}, true, nil
+	}
 	if v6, v4, ok := s.Hosts.Lookup(host); ok {
 		switch {
 		case len(v6) > 0:
@@ -145,15 +157,6 @@ func (s *Server) resolve(ctx context.Context, host string) ([]net.IP, bool, erro
 		default:
 			return v4, true, nil
 		}
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.To4() == nil {
-			return []net.IP{ip}, false, nil
-		}
-		if !s.AllowIPv4 {
-			return nil, true, errIPv4Disabled
-		}
-		return []net.IP{ip}, true, nil
 	}
 
 	ips, err := s.Resolver.Lookup(ctx, "ip6", host)
