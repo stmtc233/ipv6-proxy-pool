@@ -34,7 +34,7 @@ func startProxyWithHosts(t *testing.T, allowIPv4 bool, hosts *Hosts) string {
 		AllowIPv4:        allowIPv4,
 		Hosts:            hosts,
 		HandshakeTimeout: 200 * time.Millisecond,
-		DialTimeout:      2 * time.Second,
+		DialTimeout:      5 * time.Second, // Windows 收到 RST 后会重试，拒绝连接约需 2 秒
 		KeepAlive:        30 * time.Second,
 	}
 	go srv.Serve(ln)

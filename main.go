@@ -30,10 +30,19 @@ const (
 	defaultHostsPath = "hosts"
 )
 
+// version 在发布时通过 -ldflags "-X main.version=<tag>" 注入
+var version = "dev"
+
 // 整个程序共用一个 stdin reader，避免多个缓冲 reader 互相吞掉输入
 var stdin = bufio.NewReader(os.Stdin)
 
 func main() {
+	if len(os.Args) > 1 && slices.Contains([]string{"-v", "-version", "--version"}, os.Args[1]) {
+		fmt.Println(version)
+		return
+	}
+	fmt.Println("ipv6-proxy-pool", version)
+
 	// 判断操作系统类型
 	switch runtime.GOOS {
 	case "windows":

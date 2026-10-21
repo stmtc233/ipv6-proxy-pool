@@ -4,6 +4,13 @@
 
 支持 Linux 和 Windows（`anyipv6` 模式仅 Linux）。仅供学习参考。
 
+| 系统 | 架构 |
+| --- | --- |
+| Linux | amd64、arm64、armv7、mipsle（softfloat，适用于 MT7621 等 OpenWrt 路由器） |
+| Windows | amd64、arm64 |
+
+Linux 版本为静态编译，不依赖 glibc，可在 Alpine、OpenWrt 等系统上直接运行。
+
 ![演示](ys.gif)
 
 ## 特性
@@ -30,8 +37,9 @@
 
 1. 从 [Releases](https://github.com/stmtc233/ipv6-proxy-pool/releases) 下载对应平台的程序，或自行编译：
    ```bash
-   go build -o ipv6proxypool .
+   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ipv6proxypool .
    ```
+   查看版本：`./ipv6proxypool --version`
 2. 编辑与程序**同一目录**下的 `config.ini`，至少改好网卡名 `Networkname`
 3. 以 root / 管理员身份运行，按提示操作：
    ```bash

@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"syscall"
 	"time"
 
 	"gosdl/internal/pool"
@@ -170,11 +169,11 @@ func (s *Server) resolve(ctx context.Context, host string) ([]net.IP, bool, erro
 func replyCode(err error) byte {
 	var ne net.Error
 	switch {
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case errors.Is(err, errConnRefused):
 		return socks5.ReplyConnectionRefused
-	case errors.Is(err, syscall.ENETUNREACH):
+	case errors.Is(err, errNetUnreach):
 		return socks5.ReplyNetworkUnreachable
-	case errors.Is(err, syscall.EHOSTUNREACH), errors.As(err, &ne) && ne.Timeout():
+	case errors.Is(err, errHostUnreach), errors.As(err, &ne) && ne.Timeout():
 		return socks5.ReplyHostUnreachable
 	}
 	return socks5.ReplyGeneralFailure
@@ -208,8 +207,8 @@ func pipe(dst, src *net.TCPConn, msg string) {
 func logErr(msg string, err error) {
 	if errors.Is(err, io.EOF) ||
 		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, syscall.ECONNRESET) ||
-		errors.Is(err, syscall.EPIPE) {
+		errors.Is(err, errConnReset) ||
+		errors.Is(err, errBrokenPipe) {
 		return
 	}
 	log.Printf("%s: %v", msg, err)

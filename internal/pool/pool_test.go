@@ -64,10 +64,17 @@ func TestRandomInPrefix(t *testing.T) {
 		seen[ip.String()] = true
 	}
 
-	p = mustPrefix(t, "2001:db8::/48")
-	for _, ip := range RandomInPrefix(p, 100, nil) {
-		if !p.Contains(ip) {
-			t.Fatalf("%s not in %s", ip, p)
+	// 主机位 32~62 位时容量超出 32 位 int，在 arm / mipsle 上不能溢出
+	for _, s := range []string{"2001:db8::/48", "2001:db8::/64", "2001:db8::/80", "2001:db8::/96"} {
+		p = mustPrefix(t, s)
+		ips := RandomInPrefix(p, 100, nil)
+		if len(ips) != 100 {
+			t.Fatalf("%s: got %d addresses", s, len(ips))
+		}
+		for _, ip := range ips {
+			if !p.Contains(ip) {
+				t.Fatalf("%s not in %s", ip, p)
+			}
 		}
 	}
 }

@@ -4,23 +4,35 @@ on:
   release:
     types: [created] # 表示在创建新的 Release 时触发
 
+permissions:
+  contents: write # 上传 Release 附件
+
 jobs:
   build-go-binary:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, windows] # 需要打包的系统
-        goarch: [amd64, arm64] # 需要打包的架构
-        exclude: # 排除某些平台和架构
-          - goarch: arm64
-            goos: windows
+        include: # 需要打包的系统和架构
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm, goarm: "7" } # 树莓派、ARMv7 路由器
+          - { goos: linux, goarch: mipsle, gomips: softfloat } # MT7621 等 MIPS 路由器（OpenWrt）
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
     steps:
       - uses: actions/checkout@v7
       - uses: wangyoucao577/go-release-action@v1.55
+        env:
+          CGO_ENABLED: 0 # 静态链接，不依赖 glibc，可在 Alpine / OpenWrt 等系统上运行
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          goversion: "1.27" # 可以指定编译使用的 Golang 版本，需与 go.mod 保持一致
+          goarm: ${{ matrix.goarm }}
+          gomips: ${{ matrix.gomips }}
+          goversion: go.mod # 使用 go.mod 中声明的 Go 版本（取该版本的最新补丁）
+          build_flags: -trimpath # 去掉本地路径，构建可复现
+          ldflags: -s -w -X main.version=${{ github.ref_name }} # 去掉调试符号减小体积，注入版本号
           binary_name: "ipv6proxypool" # 可以指定二进制文件的名称
           extra_files: README.md config.ini hosts # 需要包含的额外文件
+          sha256sum: TRUE

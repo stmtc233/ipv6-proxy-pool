@@ -55,8 +55,12 @@ func RandomInPrefix(prefix *net.IPNet, count int, exclude []net.IP) []net.IP {
 			seen[[net.IPv6len]byte(ip.To16())] = struct{}{}
 		}
 	}
-	if hb := HostBits(prefix); hb < 63 {
-		count = max(0, min(count, 1<<hb-len(seen)))
+	// 用 uint64 计算容量，32 位平台上 int 放不下 1<<32 以上的值
+	count = max(0, count)
+	if hb := HostBits(prefix); hb < 64 {
+		if avail := uint64(1)<<hb - uint64(len(seen)); uint64(count) > avail {
+			count = int(avail)
+		}
 	}
 
 	ips := make([]net.IP, 0, count)

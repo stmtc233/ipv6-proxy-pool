@@ -17,7 +17,9 @@ internal/proxy          服务端：Accept 循环、拨号、双向转发、AAAA
 internal/netif          网卡操作：读取地址、增删地址、freebind、local 路由（按平台分文件）
 config.ini              默认配置，随 Release 一起发布
 hosts                   自定义域名解析示例（全部为注释），随 Release 一起发布
-.github/workflows       Release 时用 go-release-action 交叉编译 linux/amd64、linux/arm64、windows/amd64
+.github/workflows
+  ci.yml                push / PR 时检查：gofmt、go mod tidy、vet、test（含 race、32 位、Windows）、全平台交叉编译
+  build.yml             Release 时用 go-release-action 发布 linux amd64/arm64/armv7/mipsle、windows amd64/arm64
 ```
 
 ## 核心设计：Source × Selector
@@ -43,15 +45,22 @@ go build ./...
 go vet ./...
 gofmt -l .                        # 应无输出
 go test -race ./...
+GOARCH=386 go test ./...           # 32 位平台（armv7、mipsle）上 int 为 32 位，涉及位运算/容量计算时要测
 # 提交前确认所有发布平台都能编译
-for t in linux/amd64 linux/arm64 windows/amd64; do GOOS=${t%/*} GOARCH=${t#*/} go vet ./... && GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null .; done
+for t in linux/amd64 linux/arm64 linux/arm linux/mipsle windows/amd64 windows/arm64; do
+  GOOS=${t%/*} GOARCH=${t#*/} GOARM=7 GOMIPS=softfloat CGO_ENABLED=0 go vet ./... &&
+  GOOS=${t%/*} GOARCH=${t#*/} GOARM=7 GOMIPS=softfloat CGO_ENABLED=0 go build -o /dev/null .
+done
 ```
 
-Go 版本见 `go.mod`；修改 Go 版本时同步修改 `.github/workflows/build.yml` 中的 `goversion`。
+- Go 版本只在 `go.mod` 中维护，CI 和发布都从 `go.mod` 读取
+- 发布平台在 `build.yml` 和 `ci.yml` 的 matrix 中各有一份，增删平台时两处同步修改
+- 版本号通过 `-ldflags "-X main.version=<tag>"` 注入，本地构建为 `dev`
 
 ## 约定
 
 - 代码注释、提示文本中的说明使用中文；程序输出的提示/日志沿用英文
+- 网络错误码按平台区分（`internal/proxy/errno_*.go`）：Windows 是 Winsock 错误码，`syscall.ECONNREFUSED` 等常量在 Windows 上不会匹配
 - 平台相关代码用文件名后缀或 `//go:build` 分文件（`netif_linux.go`、`netif_windows.go`、`netif_other.go`、`anyip_notlinux.go`），
   每个导出函数在所有平台都要有实现，保证交叉编译通过
 - 调用外部命令时直接 `exec.Command(name, args...)`，不要经过 shell 拼接
@@ -67,7 +76,7 @@ Go 版本见 `go.mod`；修改 Go 版本时同步修改 `.github/workflows/build
 ## 测试
 
 - `internal/pool`、`internal/socks5` 的单元测试不依赖网络
-- `internal/proxy/server_test.go` 需要 IPv6 回环；没有 IPv6 的环境（很多容器/CI）会自动 Skip，不代表通过
+- `internal/proxy/server_test.go` 中 IPv6 相关用例需要 IPv6 回环；没有 IPv6 的环境（很多容器）会自动 Skip，不代表通过。GitHub Actions 的 runner 有 IPv6 回环，会实际运行
 - 增删网卡地址、local 路由、anyipv6 实际转发需要 root 和真实 IPv6 网络，无法在 CI 中验证；改动这部分时在说明中注明未经实机验证的内容
 
 ## 安全
