@@ -145,6 +145,35 @@ hosts = hosts         ; 自定义域名解析文件
 - 也可以写 IPv4 地址，只在 `ipv4 = on` 时生效；同一域名同时有 IPv6 和 IPv4 地址时只用 IPv6
 - 文件格式错误时启动失败，并提示出错的行号
 
+## 高并发
+
+实测数据：4 核容器，代理、压测客户端和目标都在同一台机器上（IPv4 回环），数据仅供量级参考：
+
+| 场景 | 结果 |
+| --- | --- |
+| 短连接（握手、往返 1 字节、关闭） | 约 1.07 万连接/秒，代理占用约 1.8 核，其中约 70% 是内核 TCP 开销 |
+| 下载吞吐（8 个连接） | 约 19 Gbit/s，代理占用约 1.2 核（splice 零拷贝） |
+| 空闲连接 | 每个连接：代理进程内存约 16.5 KiB、6 个 fd；内核另占约 40 KiB（splice 管道约 34 KiB，socket 约 7 KiB） |
+
+需要调整的系统参数：
+
+- **文件描述符**：每个连接占 6 个 fd（2 个 socket，加上 splice 每个方向一对管道）。Go 启动时会自动把软限制提到硬限制，需要调大的是硬限制，如 systemd 的 `LimitNOFILE=1048576`
+- **conntrack**：防火墙开启连接跟踪时每个连接占 2 条记录，表满后直接丢包。调大 `net.netfilter.nf_conntrack_max`，或对代理流量设置 notrack
+- **出站端口**：拨号时设置了 `IP_BIND_ADDRESS_NO_PORT`，端口在连接时按四元组分配，同一出口 IP 连接不同目标可以复用端口。短连接多时开启 `net.ipv4.tcp_tw_reuse = 1`（对 IPv6 同样生效）复用 TIME_WAIT
+- **其他**：`net.core.somaxconn`（Go 的监听队列长度取这个值）、`net.ipv4.tcp_mem` 等
+- **地址池很大时用 `anyipv6`**：网卡上的地址太多会增加内核开销（每个地址都有本地路由、组播组和邻居发现）
+
+压测工具在 `tools/bench`，默认在 `[::1]:9000` 启动内置目标服务，经代理连接它：
+
+```bash
+go build -o bench ./tools/bench
+./bench -mode conn -c 64 -d 10s                            # 新建连接速率和延迟
+./bench -mode bulk -c 8 -d 10s                             # 下载吞吐量
+./bench -mode idle -c 10000 -pid $(pidof ipv6proxypool)    # 每个连接的内存和 fd 开销（Linux）
+```
+
+`hash` 模式需要加 `-user`；目标放在另一台机器上更接近真实情况，见 `./bench -h`。
+
 ## 注意
 
 - 代理没有访问控制，默认监听 0.0.0.0，请用防火墙限制来源，或把 `listen` 设为 `127.0.0.1`，避免成为公开代理

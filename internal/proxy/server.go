@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"syscall"
 	"time"
 
 	"gosdl/internal/pool"
@@ -107,9 +108,7 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 			Password: req.Password,
 			Addr:     from,
 		}))
-		if c, ok := s.Source.(pool.Controller); ok {
-			d.Control = c.Control
-		}
+		d.Control = s.control
 	}
 	port := strconv.Itoa(req.Port)
 
@@ -131,6 +130,16 @@ func (s *Server) dial(req *socks5.Request, from net.Addr) (*net.TCPConn, byte, e
 		}
 	}
 	return nil, replyCode(lastErr), lastErr
+}
+
+// control 在绑定出口地址之前调用：先设置 IP_BIND_ADDRESS_NO_PORT，
+// 再交给需要设置 socket 选项的 Source（如 anyipv6 的 freebind）
+func (s *Server) control(network, address string, c syscall.RawConn) error {
+	bindNoPort(c)
+	if ctl, ok := s.Source.(pool.Controller); ok {
+		return ctl.Control(network, address, c)
+	}
+	return nil
 }
 
 var errIPv4Disabled = errors.New("IPv4 destination is not supported (set ipv4 = on to allow)")

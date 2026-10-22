@@ -15,6 +15,7 @@ internal/socks5         SOCKS5 协议：认证协商（无认证 / RFC 1929 用�
 internal/pool           出口地址池：Source / Selector 接口及实现、前缀地址计算
 internal/proxy          服务端：Accept 循环、拨号、双向转发、AAAA 缓存
 internal/netif          网卡操作：读取地址、增删地址、freebind、local 路由（按平台分文件）
+tools/bench             压测工具：新建连接速率、吞吐量、每个连接的内存和 fd 开销
 config.ini              默认配置，随 Release 一起发布
 hosts                   自定义域名解析示例（全部为注释），随 Release 一起发布
 .github/workflows
@@ -74,6 +75,10 @@ done
 - 只在握手阶段设置 deadline，握手完成后清除；不要给已建立的连接设绝对 deadline，死连接依靠 TCP keepalive 发现
 - 每个连接的路径上不要加锁、不要做重复解析、不要输出正常关闭类的日志（见 `logErr`）
 - 一个方向读到 EOF 时只 `CloseWrite` 半关闭；出错时关闭两端
+- 出口拨号在 bind 之前设置 `IP_BIND_ADDRESS_NO_PORT`（`Server.control`），不要去掉：否则 bind 为每个出口 IP 独占端口，
+  单个 IP 最多约 2.8 万条出站连接（含 TIME_WAIT），`tcp_tw_reuse` 也不起作用
+- 空闲连接的最大开销是 splice 管道：Go 在整个 `io.Copy` 期间每个方向持有一个调到 1MB 的管道，内核约 17 KiB/个
+- 性能相关改动用 `tools/bench` 对比前后数据（`conn` / `bulk` / `idle -pid`），并说明测试环境
 
 ## 测试
 
