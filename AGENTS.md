@@ -20,7 +20,7 @@ config.ini              默认配置，随 Release 一起发布
 hosts                   自定义域名解析示例（全部为注释），随 Release 一起发布
 .github/workflows
   ci.yml                push / PR 时检查：gofmt、go mod tidy、vet、test（含 race、32 位、Windows）、全平台交叉编译
-  build.yml             Release 时用 go-release-action 发布 linux amd64/arm64/armv7/mipsle、windows amd64/arm64
+  build.yml             推送 v* tag 或网页创建 Release 时，用 go-release-action 发布 linux amd64/arm64/armv7/mipsle、windows amd64/arm64
 ```
 
 ## 核心设计：Source × Selector
@@ -57,6 +57,8 @@ done
 - Go 版本只在 `go.mod` 中维护，CI 和发布都从 `go.mod` 读取
 - 发布平台在 `build.yml` 和 `ci.yml` 的 matrix 中各有一份，增删平台时两处同步修改
 - 版本号通过 `-ldflags "-X main.version=<tag>"` 注入，本地构建为 `dev`
+- 发布：推送附注 tag（`git tag -a --cleanup=verbatim -F notes.md vX.Y.Z`），`build.yml` 自动创建 Release，
+  说明取自 tag 注释；tag 名带 `-`（如 `v1.5.0-beta.1`）时标记为 pre-release。`--cleanup=verbatim` 保留 Markdown 的 `#` 标题
 
 ## 约定
 

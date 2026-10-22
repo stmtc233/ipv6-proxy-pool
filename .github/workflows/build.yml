@@ -2,13 +2,41 @@ name: build
 
 on:
   release:
-    types: [created] # 表示在创建新的 Release 时触发
+    types: [created] # 在网页上创建 Release 时触发
+  push:
+    tags: ["v*"] # 推送 v 开头的 tag 时自动创建 Release；tag 名带 "-"（如 v1.5.0-beta.1）时标记为 pre-release
 
 permissions:
-  contents: write # 上传 Release 附件
+  contents: write # 创建 Release、上传附件
+
+concurrency:
+  group: release-${{ github.ref_name }} # 网页上用新 tag 创建 Release 时两个事件都会触发，串行执行
 
 jobs:
+  create-release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 创建 Release（已存在则跳过），说明取自 tag 的注释
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          # checkout 拉取的 tag 是指向提交的轻量引用，重新拉取以获得附注 tag 的说明
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          git tag -l --format='%(contents)' "$TAG" > notes.md
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}"
+
   build-go-binary:
+    needs: create-release
+    if: ${{ !failure() && !cancelled() }} # 网页创建 Release 时 create-release 被跳过，仍然构建
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,6 +54,8 @@ jobs:
           CGO_ENABLED: 0 # 静态链接，不依赖 glibc，可在 Alpine / OpenWrt 等系统上运行
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
+          release_tag: ${{ github.ref_name }} # push tag 事件没有 release 上下文，按 tag 找到 Release
+          overwrite: TRUE # 两个事件都触发时，后一次覆盖同名附件
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
           goarm: ${{ matrix.goarm }}
