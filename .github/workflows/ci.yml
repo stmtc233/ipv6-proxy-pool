@@ -38,12 +38,23 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # 运行发布用的打包脚本，提前发现打包问题
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: scripts/build-release.sh ci dist
+      - run: cd dist && sha256sum -c sha256sums.txt
+
   cross-build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include: # 与 build.yml 的发布平台保持一致
+        include: # 与 scripts/build-release.sh 的发布平台保持一致
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
           - { goos: linux, goarch: arm, goarm: "7" }

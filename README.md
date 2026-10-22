@@ -35,9 +35,10 @@ Linux 版本为静态编译，不依赖 glibc，可在 Alpine、OpenWrt 等系�
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/stmtc233/ipv6-proxy-pool/releases) 下载对应平台的程序，或自行编译：
+1. 从 [Releases](https://github.com/stmtc233/ipv6-proxy-pool/releases) 下载对应平台的压缩包（可用同一页的 `sha256sums.txt` 校验：`sha256sum -c sha256sums.txt --ignore-missing`），或自行编译：
    ```bash
    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ipv6proxypool .
+   scripts/build-release.sh v1.0.0 dist   # 或者一次打包所有发布平台
    ```
    查看版本：`./ipv6proxypool --version`
 2. 编辑 `config.ini`，至少改好网卡名 `Networkname`。程序从**当前工作目录**读取 `config.ini` 和 `hosts`，请先 `cd` 到程序所在目录再运行（用 systemd 等启动时设置 `WorkingDirectory`）

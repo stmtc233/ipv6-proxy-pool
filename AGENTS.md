@@ -16,11 +16,12 @@ internal/pool           出口地址池：Source / Selector 接口及实现、�
 internal/proxy          服务端：Accept 循环、拨号、双向转发、AAAA 缓存
 internal/netif          网卡操作：读取地址、增删地址、freebind、local 路由（按平台分文件）
 tools/bench             压测工具：新建连接速率、吞吐量、每个连接的内存和 fd 开销
+scripts/build-release.sh  编译所有发布平台并打包，生成 sha256sums.txt（发布和 CI 共用）
 config.ini              默认配置，随 Release 一起发布
 hosts                   自定义域名解析示例（全部为注释），随 Release 一起发布
 .github/workflows
-  ci.yml                push / PR 时检查：gofmt、go mod tidy、vet、test（含 race、32 位、Windows）、全平台交叉编译
-  build.yml             推送 v* tag 或网页创建 Release 时，用 go-release-action 发布 linux amd64/arm64/armv7/mipsle、windows amd64/arm64
+  ci.yml                push / PR 时检查：gofmt、go mod tidy、vet、test（含 race、32 位、Windows）、全平台交叉编译、打包脚本
+  build.yml             推送 v* tag 时运行打包脚本、创建 Release 并上传附件
 ```
 
 ## 核心设计：Source × Selector
@@ -55,10 +56,13 @@ done
 ```
 
 - Go 版本只在 `go.mod` 中维护，CI 和发布都从 `go.mod` 读取
-- 发布平台在 `build.yml` 和 `ci.yml` 的 matrix 中各有一份，增删平台时两处同步修改
+- 发布平台在 `scripts/build-release.sh` 和 `ci.yml` 的 cross-build matrix 中各有一份，增删平台时两处同步修改
 - 版本号通过 `-ldflags "-X main.version=<tag>"` 注入，本地构建为 `dev`
-- 发布：推送附注 tag（`git tag -a --cleanup=verbatim -F notes.md vX.Y.Z`），`build.yml` 自动创建 Release，
-  说明取自 tag 注释；tag 名带 `-`（如 `v1.5.0-beta.1`）时标记为 pre-release。`--cleanup=verbatim` 保留 Markdown 的 `#` 标题
+- 发布：推送附注 tag（`git tag -a --cleanup=verbatim -F notes.md vX.Y.Z`），`build.yml` 先编译全部平台，再创建 Release
+  并上传附件，说明取自 tag 注释；tag 名带 `-`（如 `v1.5.0-beta.1`）时标记为 pre-release。`--cleanup=verbatim` 保留 Markdown 的 `#` 标题。
+  也可以在网页上用**新** tag 创建 Release（会推送 tag 触发构建）
+- 附件只有各平台压缩包和一份 `sha256sums.txt`；不要改回 go-release-action：它的 `gomips` 有 bug（`-eq` 比较字符串），
+  mipsle 构建必定失败，且每个附件都会附带 .md5 / .sha256
 
 ## 约定
 

@@ -1,68 +1,45 @@
 name: build
 
+# 推送 v 开头的 tag 时发布。网页上用新 tag 创建 Release 也会推送 tag，同样触发；
+# 用已存在的 tag 在网页上创建 Release 不会触发。tag 名带 "-"（如 v1.5.0-beta.1）时标记为 pre-release。
 on:
-  release:
-    types: [created] # 在网页上创建 Release 时触发
   push:
-    tags: ["v*"] # 推送 v 开头的 tag 时自动创建 Release；tag 名带 "-"（如 v1.5.0-beta.1）时标记为 pre-release
+    tags: ["v*"]
 
 permissions:
   contents: write # 创建 Release、上传附件
 
 concurrency:
-  group: release-${{ github.ref_name }} # 网页上用新 tag 创建 Release 时两个事件都会触发，串行执行
+  group: release-${{ github.ref_name }}
 
 jobs:
-  create-release:
-    if: github.event_name == 'push'
+  release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
-      - name: 创建 Release（已存在则跳过），说明取自 tag 的注释
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod # Go 版本只在 go.mod 中维护
+
+      # 先编译，全部成功后才创建 Release，避免留下缺附件的 Release
+      - name: 编译并打包所有平台
+        run: scripts/build-release.sh "$TAG" dist
+
+      - name: 创建 Release（网页上已创建则跳过），说明取自 tag 注释
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists"
-            exit 0
+          else
+            # checkout 拉取的 tag 是指向提交的轻量引用，重新拉取以获得附注 tag 的说明
+            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+            git tag -l --format='%(contents)' "$TAG" >notes.md
+            flags=()
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}"
           fi
-          # checkout 拉取的 tag 是指向提交的轻量引用，重新拉取以获得附注 tag 的说明
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          git tag -l --format='%(contents)' "$TAG" > notes.md
-          flags=()
-          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}"
 
-  build-go-binary:
-    needs: create-release
-    if: ${{ !failure() && !cancelled() }} # 网页创建 Release 时 create-release 被跳过，仍然构建
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: # 需要打包的系统和架构
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: linux, goarch: arm, goarm: "7" } # 树莓派、ARMv7 路由器
-          - { goos: linux, goarch: mipsle, gomips: softfloat } # MT7621 等 MIPS 路由器（OpenWrt）
-          - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
-    steps:
-      - uses: actions/checkout@v7
-      - uses: wangyoucao577/go-release-action@v1.55
-        env:
-          CGO_ENABLED: 0 # 静态链接，不依赖 glibc，可在 Alpine / OpenWrt 等系统上运行
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
-          release_tag: ${{ github.ref_name }} # push tag 事件没有 release 上下文，按 tag 找到 Release
-          overwrite: TRUE # 两个事件都触发时，后一次覆盖同名附件
-          goos: ${{ matrix.goos }}
-          goarch: ${{ matrix.goarch }}
-          goarm: ${{ matrix.goarm }}
-          gomips: ${{ matrix.gomips }}
-          goversion: go.mod # 使用 go.mod 中声明的 Go 版本（取该版本的最新补丁）
-          build_flags: -trimpath # 去掉本地路径，构建可复现
-          ldflags: -s -w -X main.version=${{ github.ref_name }} # 去掉调试符号减小体积，注入版本号
-          binary_name: "ipv6proxypool" # 可以指定二进制文件的名称
-          extra_files: README.md config.ini hosts # 需要包含的额外文件
-          sha256sum: TRUE
+      - name: 上传附件（各平台压缩包 + sha256sums.txt）
+        run: gh release upload "$TAG" dist/* --clobber
