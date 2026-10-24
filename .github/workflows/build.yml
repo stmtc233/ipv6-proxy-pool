@@ -1,26 +1,45 @@
 name: build
 
+# 推送 v 开头的 tag 时发布。网页上用新 tag 创建 Release 也会推送 tag，同样触发；
+# 用已存在的 tag 在网页上创建 Release 不会触发。tag 名带 "-"（如 v1.5.0-beta.1）时标记为 pre-release。
 on:
-  release:
-    types: [created] # 表示在创建新的 Release 时触发
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # 创建 Release、上传附件
+
+concurrency:
+  group: release-${{ github.ref_name }}
 
 jobs:
-  build-go-binary:
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, windows] # 需要打包的系统
-        goarch: [amd64, arm64] # 需要打包的架构
-        exclude: # 排除某些平台和架构
-          - goarch: arm64
-            goos: windows
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: wangyoucao577/go-release-action@v1.30
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
-          goos: ${{ matrix.goos }}
-          goarch: ${{ matrix.goarch }}
-          goversion: 1.18 # 可以指定编译使用的 Golang 版本
-          binary_name: "ipv6proxypool" # 可以指定二进制文件的名称
-          extra_files: README.md config.ini # 需要包含的额外文件
+          go-version-file: go.mod # Go 版本只在 go.mod 中维护
+
+      # 先编译，全部成功后才创建 Release，避免留下缺附件的 Release
+      - name: 编译并打包所有平台
+        run: scripts/build-release.sh "$TAG" dist
+
+      - name: 创建 Release（网页上已创建则跳过），说明取自 tag 注释
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+          else
+            # checkout 拉取的 tag 是指向提交的轻量引用，重新拉取以获得附注 tag 的说明
+            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+            git tag -l --format='%(contents)' "$TAG" >notes.md
+            flags=()
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}"
+          fi
+
+      - name: 上传附件（各平台压缩包 + sha256sums.txt）
+        run: gh release upload "$TAG" dist/* --clobber
